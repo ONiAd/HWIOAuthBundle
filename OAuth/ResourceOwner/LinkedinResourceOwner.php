@@ -11,6 +11,8 @@
 
 namespace HWI\Bundle\OAuthBundle\OAuth\ResourceOwner;
 
+use HWI\Bundle\OAuthBundle\Security\Core\Authentication\Token\OAuthToken;
+use Psr\Http\Message\ResponseInterface;
 use Symfony\Component\OptionsResolver\OptionsResolver;
 
 /**
@@ -24,15 +26,14 @@ class LinkedinResourceOwner extends GenericOAuth2ResourceOwner
     /**
      * {@inheritdoc}
      */
-    protected $paths = array(
+    protected $paths = [
         'identifier' => 'id',
-        'nickname' => 'formattedName',
-        'firstname' => 'firstName',
-        'lastname' => 'lastName',
-        'realname' => 'formattedName',
+        'nickname' => 'emailAddress',
+        'firstname' => 'firstName.localized.en_US',
+        'lastname' => 'lastName.localized.en_US',
         'email' => 'emailAddress',
-        'profilepicture' => 'pictureUrl',
-    );
+        'profilepicture' => 'profilePicture.displayImage~.elements.1.identifiers.0.identifier',
+    ];
 
     /**
      * {@inheritdoc}
@@ -47,8 +48,30 @@ class LinkedinResourceOwner extends GenericOAuth2ResourceOwner
      */
     protected function doGetUserInformationRequest($url, array $parameters = array())
     {
-        // LinkedIn uses different variable as they still support OAuth1.0a
         return parent::doGetUserInformationRequest(str_replace('access_token', 'oauth2_access_token', $url), $parameters);
+
+
+    }
+
+    public function getUserInformation(array $accessToken, array $extraParameters = array())
+    {
+        $response = parent::getUserInformation($accessToken, $extraParameters);
+        $responseData = $response->getData();
+        // The user info returned by /me doesn't contain the email so we make an extra request to fetch it
+        $content = $this->httpRequest(
+            $this->normalizeUrl($this->options['email_url'], $extraParameters),
+            null,
+            ['Authorization' => 'Bearer '.$accessToken['access_token']]
+        );
+        $emailResponse = $this->getResponseContent($content);
+        if (isset($emailResponse['elements']) && \count($emailResponse['elements']) > 0) {
+            $responseData['emailAddress'] = $emailResponse['elements'][0]['handle~']['emailAddress'];
+        }
+        // errors not handled because I don't see any relevant thing to do with them
+        $response->setData($responseData);
+
+
+        return $response;
     }
 
     /**
@@ -61,7 +84,8 @@ class LinkedinResourceOwner extends GenericOAuth2ResourceOwner
         $resolver->setDefaults(array(
             'authorization_url' => 'https://www.linkedin.com/oauth/v2/authorization',
             'access_token_url' => 'https://www.linkedin.com/oauth/v2/accessToken',
-            'infos_url' => 'https://api.linkedin.com/v1/people/~:(id,first-name,last-name,formatted-name,email-address,picture-url)?format=json',
+            'infos_url' => 'https://api.linkedin.com/v2/me?projection=(id,firstName,lastName,profilePicture(displayImage~:playableStreams))',
+            'email_url' => 'https://api.linkedin.com/v2/emailAddress?q=members&projection=(elements*(handle~))',
 
             'csrf' => true,
 
